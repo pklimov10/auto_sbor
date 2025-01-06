@@ -331,7 +331,7 @@ collect_thread_dumps() {
             if ! kill -0 "$pid" 2>/dev/null; then
                 log "WARNING" "Process $pid no longer exists"
                 continue
-            }
+            fi
 
             # Попытка получить thread dump с повторами при неудаче
             local retry=0
