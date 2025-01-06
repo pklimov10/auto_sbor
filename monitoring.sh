@@ -13,32 +13,69 @@ ERRORHOME=/home/wildfly/
 javahome=/u01/CM/java
 javaclass=/u01/CM/cm-data/scripts/
 
-# Функция для логирования
+# Функция для логирования с поддержкой уровней и цветов
 log() {
     local level=$1
     shift
     local message=$@
     local timestamp=$(date +'%Y-%m-%d %H:%M:%S')
-    echo -e "${timestamp} [${level}] ${message}"
+    local color=""
+
+    case $level in
+        "ERROR") color=$RED ;;
+        "WARNING") color=$YELLOW ;;
+        "INFO") color=$GREEN ;;
+        *) color=$NC ;;
+    esac
+
+    echo -e "${timestamp} [${color}${level}${NC}] ${message}"
 }
 
 # Функция проверки наличия необходимых директорий
 check_directories() {
     local dirs=("$WFHOME" "$ERRORHOME" "$javahome" "$javaclass")
+    local missing_dirs=()
+
     for dir in "${dirs[@]}"; do
         if [ ! -d "$dir" ]; then
-            log "ERROR" "Directory ${dir} does not exist"
-            exit 1
+            missing_dirs+=("$dir")
         fi
     done
+
+    if [ ${#missing_dirs[@]} -ne 0 ]; then
+        log "ERROR" "Following directories do not exist:"
+        for dir in "${missing_dirs[@]}"; do
+            log "ERROR" "  - $dir"
+        done
+        exit 1
+    fi
 }
 
 # Функция для создания временной директории
 create_temp_dir() {
-    if [ ! -d "$ERRORHOME/tmp" ]; then
-        mkdir -p "$ERRORHOME/tmp"
-        log "INFO" "Created temporary directory: $ERRORHOME/tmp"
+    local temp_dir="$ERRORHOME/tmp"
+    if [ ! -d "$temp_dir" ]; then
+        if ! mkdir -p "$temp_dir" 2>/dev/null; then
+            log "ERROR" "Failed to create temporary directory: $temp_dir"
+            exit 1
+        fi
+        log "INFO" "Created temporary directory: $temp_dir"
     fi
+
+    # Проверка прав на запись
+    if [ ! -w "$temp_dir" ]; then
+        log "ERROR" "No write permission for directory: $temp_dir"
+        exit 1
+    fi
+}
+get_jboss_pids() {
+    local pids=()
+    while IFS= read -r line; do
+        local pid=$(echo "$line" | awk '{print $1}')
+        pids+=("$pid")
+    done < <("$javahome/bin/jps" -v | grep jboss-modules)
+
+    echo "${pids[@]}"
 }
 
 # Функция для извлечения данных из XML
@@ -119,8 +156,7 @@ execute_sql_query() {
     local query=$6
     local output=$7
 
-    "$my_java_home" -cp "$JDBCFILELOCATION:$javaclass" PostgresqlQueryExecuteJDBC \
-        -h "$host" -p "$port" -U "$user" -W "$pass" -d "$db" -c "$query" > "$output"
+    "$my_java_home" -cp "$JDBCFILELOCATION:$javaclass" PostgresqlQueryExecuteJDBC -h "$host" -p "$port" -U "$user" -W "$pass" -d "$db" -c "$query" > "$output"
 }
 
 # Функция сбора информации о SQL
@@ -269,48 +305,98 @@ collect_pool_info() {
 # Функция сбора thread dumps
 collect_thread_dumps() {
     log "INFO" "Starting thread dump collection..."
+    local pids=($(get_jboss_pids))
+
+    if [ ${#pids[@]} -eq 0 ]; then
+        log "ERROR" "No JBoss processes found"
+        return 1
+    fi
+
+    log "INFO" "Found ${#pids[@]} JBoss process(es)"
+
     local count=0
-    local max_dumps=5
+    while [ $count -lt $MAX_DUMPS ]; do
+        log "INFO" "Collecting thread dump set $((count + 1)) of $MAX_DUMPS"
 
-    while [ $count -lt $max_dumps ]; do
-        local pid=$("$javahome/bin/jps" -v | grep jboss-modules | awk '{print $1}')
-        if [ -z "$pid" ]; then
-            log "ERROR" "JBoss process not found"
-            return 1
-        fi
+        for pid in "${pids[@]}"; do
+            local dump_file="$ERRORHOME/tmp/$(hostname)_pid${pid}_$(date +'ThreadDump_%Y.%m.%d_%H-%M-%S').csv"
 
-        log "INFO" "Collecting thread dump $((count + 1)) of $max_dumps"
-        "$javahome/bin/jcmd" "$pid" Thread.print >> "$ERRORHOME/tmp/$(hostname)_$(date +'ThreadDump_%Y.%m.%d_%H-%M-%S').csv"
+            # Попытка получить thread dump с повторами при неудаче
+            local retry=0
+            while [ $retry -lt $MAX_RETRIES ]; do
+                if timeout $TIMEOUT "$javahome/bin/jcmd" "$pid" Thread.print > "$dump_file" 2>/dev/null; then
+                    log "INFO" "Successfully collected thread dump for PID $pid"
+                    break
+                else
+                    ((retry++))
+                    if [ $retry -eq $MAX_RETRIES ]; then
+                        log "ERROR" "Failed to collect thread dump for PID $pid after $MAX_RETRIES attempts"
+                    else
+                        log "WARNING" "Retry $retry/$MAX_RETRIES for PID $pid"
+                        sleep 2
+                    fi
+                fi
+            done
+        done
 
         ((count++))
-        [ $count -lt $max_dumps ] && sleep 10
+        [ $count -lt $MAX_DUMPS ] && sleep $THREAD_DUMP_INTERVAL
     done
 
     archive_thread_dumps
 }
 
+
 # Функция архивации thread dumps
 archive_thread_dumps() {
     local archive_name="$(hostname)_$(date +'ThreadDump_%Y.%m.%d_%H-%M-%S').tar.gz"
-    tar -czf "$ERRORHOME/$archive_name" -C "$ERRORHOME/tmp" .
-    rm -f "$ERRORHOME/tmp"/*.csv
-    log "INFO" "Thread dumps archived: $ERRORHOME/$archive_name"
+    local archive_path="$ERRORHOME/$archive_name"
+
+    if [ ! -d "$ERRORHOME/tmp" ] || [ -z "$(ls -A "$ERRORHOME/tmp")" ]; then
+        log "ERROR" "No thread dumps found to archive"
+        return 1
+    fi
+
+    if tar -czf "$archive_path" -C "$ERRORHOME/tmp" . ; then
+        log "INFO" "Thread dumps archived successfully: $archive_path"
+        # Подсчет количества файлов в архиве
+        local file_count=$(tar -tf "$archive_path" | wc -l)
+        log "INFO" "Archive contains $file_count files"
+
+        # Очистка временных файлов
+        rm -f "$ERRORHOME/tmp"/*.csv
+        return 0
+    else
+        log "ERROR" "Failed to create thread dump archive"
+        return 1
+    fi
 }
 
 # Функция сбора всей информации
 collect_all() {
-    log "INFO" "Collecting all diagnostic information..."
+    log "INFO" "Starting collection of all diagnostic information..."
     local timestamp=$(date +"%Y-%m-%d-%H-%M")
     local output_dir="$ERRORHOME/$timestamp"
-    mkdir -p "$output_dir"
 
-    collect_logs
-    collect_thread_dumps
-    collect_sql_info
+    if ! mkdir -p "$output_dir"; then
+        log "ERROR" "Failed to create output directory: $output_dir"
+        return 1
+    fi
 
-    log "INFO" "All diagnostic information collected in: $output_dir"
+    local success=true
+
+    collect_logs || success=false
+    collect_thread_dumps || success=false
+    collect_sql_info || success=false
+
+    if $success; then
+        log "INFO" "All diagnostic information collected successfully in: $output_dir"
+        return 0
+    else
+        log "WARNING" "Some collections failed, check logs for details"
+        return 1
+    fi
 }
-
 # Функция отображения помощи
 show_usage() {
     echo "Usage: $0 <option>"
