@@ -303,10 +303,12 @@ collect_pool_info() {
 }
 
 # Функция сбора thread dumps
+# Функция сбора thread dumps
 collect_thread_dumps() {
     log "INFO" "Starting thread dump collection..."
     local pids=($(get_jboss_pids))
 
+    # Проверяем, что массив pids не пустой
     if [ ${#pids[@]} -eq 0 ]; then
         log "ERROR" "No JBoss processes found"
         return 1
@@ -314,22 +316,33 @@ collect_thread_dumps() {
 
     log "INFO" "Found ${#pids[@]} JBoss process(es)"
 
+    # Создаем временную директорию, если её нет
+    mkdir -p "$ERRORHOME/tmp"
+
     local count=0
-    while [ $count -lt $MAX_DUMPS ]; do
+    while [ "$count" -lt "$MAX_DUMPS" ]; do
         log "INFO" "Collecting thread dump set $((count + 1)) of $MAX_DUMPS"
 
+        local dumps_collected=0
         for pid in "${pids[@]}"; do
             local dump_file="$ERRORHOME/tmp/$(hostname)_pid${pid}_$(date +'ThreadDump_%Y.%m.%d_%H-%M-%S').csv"
 
+            # Проверяем существование процесса перед сбором dump
+            if ! kill -0 "$pid" 2>/dev/null; then
+                log "WARNING" "Process $pid no longer exists"
+                continue
+            }
+
             # Попытка получить thread dump с повторами при неудаче
             local retry=0
-            while [ $retry -lt $MAX_RETRIES ]; do
-                if timeout $TIMEOUT "$javahome/bin/jcmd" "$pid" Thread.print > "$dump_file" 2>/dev/null; then
+            while [ "$retry" -lt "$MAX_RETRIES" ]; do
+                if [ -x "$javahome/bin/jcmd" ] && timeout "$TIMEOUT" "$javahome/bin/jcmd" "$pid" Thread.print > "$dump_file" 2>/dev/null; then
                     log "INFO" "Successfully collected thread dump for PID $pid"
+                    ((dumps_collected++))
                     break
                 else
                     ((retry++))
-                    if [ $retry -eq $MAX_RETRIES ]; then
+                    if [ "$retry" -eq "$MAX_RETRIES" ]; then
                         log "ERROR" "Failed to collect thread dump for PID $pid after $MAX_RETRIES attempts"
                     else
                         log "WARNING" "Retry $retry/$MAX_RETRIES for PID $pid"
@@ -339,12 +352,25 @@ collect_thread_dumps() {
             done
         done
 
+        # Проверяем, были ли собраны dumps в этой итерации
+        if [ "$dumps_collected" -eq 0 ]; then
+            log "ERROR" "No thread dumps collected in this iteration"
+            break
+        fi
+
         ((count++))
-        [ $count -lt $MAX_DUMPS ] && sleep $THREAD_DUMP_INTERVAL
+        [ "$count" -lt "$MAX_DUMPS" ] && sleep "$THREAD_DUMP_INTERVAL"
     done
 
-    archive_thread_dumps
+    # Проверяем наличие файлов перед архивацией
+    if [ -n "$(ls -A "$ERRORHOME/tmp/" 2>/dev/null)" ]; then
+        archive_thread_dumps
+    else
+        log "ERROR" "No thread dumps found to archive"
+        return 1
+    fi
 }
+
 
 
 # Функция архивации thread dumps
