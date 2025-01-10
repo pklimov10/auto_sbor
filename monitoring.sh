@@ -15,7 +15,7 @@ WFHOME=/u01/CM/wildfly
 STANDALONEXML=$WFHOME/standalone/configuration/standalone.xml
 ERRORHOME=/home/wildfly/
 javahome=/u01/CM/java
-javaclass=/u01/CM/cm-data/scripts/
+javaclass=/u01/CM/data/scripts/
 
 # Функция для логирования с поддержкой уровней и цветов
 log() {
@@ -161,29 +161,32 @@ get_system_info() {
     log "INFO" "Collecting system information..."
 
     # Java Home
-    my_java_home=$(systemctl status wildfly | grep Standalone | awk '{print $2}')
+my_java_home=`systemctl status wildfly | grep Standalone  |awk '{print $2}'`
+#Опредялем дравйер для РСУБД
+JDBCDRIVERNAME=`cat $STANDALONEXML |grep -A 30 'pool-name="CM5"'  |grep driver | sed 's/</ /g; s/>/ /g'  |grep -v 'name="h2"' |awk '{print $2}'`
+#Формируем путь до дравйера для РСУБД
+JDBCFILELOCATION=$WFHOME/standalone/deployments/$JDBCDRIVERNAME
+#получаем ip адрес cm5
+IP_CM5=`cat $STANDALONEXML |grep -A 30 'pool-name="CM5"' |grep jdbc:postgresql | sed 's/ //g'   |sed 's/\/\// /' |awk '{print $2}'  | sed 's/:/ /;s/\// /g' |awk '{print $1}'`
+#Получаем IP адерс cmj
+IP_CMJ=`cat $STANDALONEXML |grep -A 30 'pool-name="CMJ"' |grep jdbc:postgresql | sed 's/ //g'   |sed 's/\/\// /' |awk '{print $2}'  | sed 's/:/ /;s/\// /g' |grep -v cm6 |grep -v cm5 |awk '{print $1}'`
+#Получаем порт cm5
+PORT_CM5=`cat $STANDALONEXML |grep -A 30 'pool-name="CM5"' |grep jdbc:postgresql | sed 's/ //g'   |sed 's/\/\// /' |awk '{print $2}'  | sed 's/:/ /;s/\// /g' |awk '{print $2}'`
+#Получаем порт cmj
+PORT_CMJ=`cat $STANDALONEXML |grep -A 30 'pool-name="CMJ"' |grep jdbc:postgresql | sed 's/ //g'   |sed 's/\/\// /' |awk '{print $2}'  | sed 's/:/ /;s/\// /g' |grep -v cm6 |grep -v cm5  |awk '{print $2}'`
+#Получаем название базы cm5
+DB_CN5_NAME=`cat $STANDALONEXML |grep -A 30 'pool-name="CM5"' |grep jdbc:postgresql | sed 's/ //g'   |sed 's/\/\// /' |awk '{print $2}'  | sed 's/:/ /;s/\// /g' | sed 's/?/ /g' |awk '{print $3}'`
+#Получаем название базы cmj
+DB_CNJ_NAME=`cat $STANDALONEXML |grep -A 30 'pool-name="CMJ"' |grep jdbc:postgresql | sed 's/ //g'   |sed 's/\/\// /' |awk '{print $2}'  | sed 's/:/ /;s/\// /g' | sed 's/?/ /g' |grep -v cm6 |grep -v cm5  |awk '{print $3}'`
+#полчаем юзера для РСУБД CM5
+DB_CM5_USER=`cat $STANDALONEXML |grep -A 30 'pool-name="CM5"' |grep user-name  | sed 's/ //g' |sed  's/</ /g; s/>/ /g' |awk '{print $2}'`
+#полчаем юзера для РСУБД CMJ
+DB_CMJ_USER=`cat $STANDALONEXML |grep -A 30 'pool-name="CMJ"' |grep user-name  | sed 's/ //g' |sed  's/</ /g; s/>/ /g' |awk '{print $2}'`
+#Получаем пароль для РСУБД cm5
+DB_CM5_PASS=`cat $STANDALONEXML |grep -A 30 'pool-name="CM5"' |grep password  | sed 's/ //g' |sed  's/</ /g; s/>/ /g' |awk '{print $2}'`
+#Получаем пароль для РСУБД cmj
+DB_CMJ_PASS=`cat $STANDALONEXML |grep -A 30 'pool-name="CMJ"' |grep password | sed 's/ //g' |sed  's/</ /g; s/>/ /g' |awk '{print $2}'`
 
-    # JDBC Driver
-    JDBCDRIVERNAME=$(extract_xml_value 'pool-name="CM5"' 'driver')
-    JDBCFILELOCATION="$WFHOME/standalone/deployments/$JDBCDRIVERNAME"
-
-    # Database connection parameters
-    local cm5_params=$(get_db_connection_params "CM5")
-    local cmj_params=$(get_db_connection_params "CMJ")
-
-    # CM5 parameters
-    IP_CM5=$(echo "$cm5_params" | awk '{print $1}')
-    PORT_CM5=$(echo "$cm5_params" | awk '{print $2}')
-    DB_CN5_NAME=$(echo "$cm5_params" | awk '{print $3}' | sed 's/?.*$//')
-    DB_CM5_USER=$(extract_xml_value 'pool-name="CM5"' 'user-name')
-    DB_CM5_PASS=$(extract_xml_value 'pool-name="CM5"' 'password')
-
-    # CMJ parameters
-    IP_CMJ=$(echo "$cmj_params" | awk '{print $1}')
-    PORT_CMJ=$(echo "$cmj_params" | awk '{print $2}')
-    DB_CNJ_NAME=$(echo "$cmj_params" | awk '{print $3}' | sed 's/?.*$//')
-    DB_CMJ_USER=$(extract_xml_value 'pool-name="CMJ"' 'user-name')
-    DB_CMJ_PASS=$(extract_xml_value 'pool-name="CMJ"' 'password')
 
     display_system_info
 }
@@ -292,8 +295,8 @@ collect_sql_info() {
 # Функция сбора расширенной статистики пулов
 collect_extended_pool_stats() {
     local output_dir=$1
-    local cm5_pool_file="$output_dir/$(date +'pool_cm5_%Y.%m.%d_%H-%M-%S').txt"
-    local cmj_pool_file="$output_dir/$(date +'pool_cmj_%Y.%m.%d_%H-%M-%S').txt"
+    local cm5_pool_file="$output_dir/$(date +'pool_cm5_%Y.%m.%d_%H-%M').txt"
+    local cmj_pool_file="$output_dir/$(date +'pool_cmj_%Y.%m.%d_%H-%M').txt"
 
     # CM5 Pool Statistics
     {
@@ -343,7 +346,7 @@ collect_pool_info() {
     local pass=$6
     local db=$7
 
-    local pool_file="$output_dir/$(hostname)_pool_${db_name}_$(date +'%Y.%m.%d_%H-%M-%S').txt"
+    local pool_file="$output_dir/$(hostname)_pool_${db_name}_$(date +'%Y.%m.%d_%H-%M').txt"
 
     # Get max connections
     local max_conn=$(execute_sql_query "$host" "$port" "$user" "$pass" "$db" \
