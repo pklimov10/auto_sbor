@@ -74,12 +74,68 @@ create_temp_dir() {
 }
 get_jboss_pids() {
     local pids=()
+
+    # Попытка 1: Использование jps
     while IFS= read -r line; do
         local pid=$(echo "$line" | awk '{print $1}')
-        pids+=("$pid")
-    done < <("$javahome/bin/jps" -v | grep jboss-modules)
+        if [ -n "$pid" ]; then
+            pids+=("$pid")
+        fi
+    done < <("$javahome/bin/jps" -v 2>/dev/null | grep jboss-modules)
 
-    echo "${pids[@]}"
+    # Если jps не нашел процессы, пробуем альтернативные методы
+    if [ ${#pids[@]} -eq 0 ]; then
+        log "WARNING" "JPS did not find any processes, trying alternative methods..."
+
+        # Попытка 2: Поиск через ps с фильтром по standalone.sh
+        while IFS= read -r line; do
+            local pid=$(echo "$line" | awk '{print $2}')
+            if [ -n "$pid" ]; then
+                pids+=("$pid")
+            fi
+        done < <(ps -ef | grep "[s]tandalone.sh" | grep java)
+
+        # Попытка 3: Поиск через /proc с проверкой командной строки
+        if [ ${#pids[@]} -eq 0 ]; then
+            for pid_dir in /proc/[0-9]*; do
+                if [ -r "$pid_dir/cmdline" ]; then
+                    if grep -q "standalone.sh\|jboss-modules.jar" "$pid_dir/cmdline" 2>/dev/null; then
+                        local pid=$(basename "$pid_dir")
+                        pids+=("$pid")
+                    fi
+                fi
+            done
+        fi
+
+        # Попытка 4: Поиск через systemctl (если WildFly запущен как сервис)
+        if [ ${#pids[@]} -eq 0 ]; then
+            local systemd_pid=$(systemctl show -p MainPID wildfly 2>/dev/null | cut -d= -f2)
+            if [ -n "$systemd_pid" ] && [ "$systemd_pid" != "0" ]; then
+                # Получаем PID Java процесса, а не скрипта запуска
+                local java_pid=$(pgrep -P "$systemd_pid" java 2>/dev/null)
+                if [ -n "$java_pid" ]; then
+                    pids+=("$java_pid")
+                fi
+            fi
+        fi
+    fi
+
+    # Проверка найденных PID
+    local valid_pids=()
+    for pid in "${pids[@]}"; do
+        if [ -e "/proc/$pid" ]; then
+            valid_pids+=("$pid")
+        fi
+    done
+
+    if [ ${#valid_pids[@]} -eq 0 ]; then
+        log "ERROR" "No valid JBoss processes found using any method"
+        return 1
+    else
+        log "INFO" "Found ${#valid_pids[@]} valid JBoss process(es): ${valid_pids[*]}"
+    fi
+
+    echo "${valid_pids[@]}"
 }
 
 # Функция для извлечения данных из XML
