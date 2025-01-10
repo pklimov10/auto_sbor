@@ -7,9 +7,9 @@ readonly YELLOW='\033[1;33m'
 readonly NC='\033[0m' # No Color
 # Константы для thread dump
 readonly MAX_DUMPS=6                  # Максимальное количество дампов
-readonly MAX_RETRIES=3               # Максимальное количество попыток
-readonly TIMEOUT=30                  # Таймаут в секундах
-readonly THREAD_DUMP_INTERVAL=60     # Интервал между дампами в секунда
+readonly MAX_RETRIES=2               # Максимальное количество попыток
+readonly TIMEOUT=10                  # Таймаут в секундах
+readonly THREAD_DUMP_INTERVAL=5     # Интервал между дампами в секунда
 # Переменные окружения
 WFHOME=/u01/CM/wildfly
 STANDALONEXML=$WFHOME/standalone/configuration/standalone.xml
