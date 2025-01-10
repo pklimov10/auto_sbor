@@ -231,8 +231,8 @@ collect_sql_info() {
     log "INFO" "Collecting SQL information..."
 
     # Collect pool information
-    collect_pool_info "$output_dir" "CM5" "$IP_CM5" "$PORT_CM5" "$DB_CM5_USER" "$DB_CM5_PASS" "$DB_CN5_NAME"
-    collect_pool_info "$output_dir" "CMJ" "$IP_CMJ" "$PORT_CMJ" "$DB_CMJ_USER" "$DB_CMJ_PASS" "$DB_CNJ_NAME"
+    #collect_pool_info "$output_dir" "CM5" "$IP_CM5" "$PORT_CM5" "$DB_CM5_USER" "$DB_CM5_PASS" "$DB_CN5_NAME"
+    #collect_pool_info "$output_dir" "CMJ" "$IP_CMJ" "$PORT_CMJ" "$DB_CMJ_USER" "$DB_CMJ_PASS" "$DB_CNJ_NAME"
 
     # Collect query information for CM5
     # All queries
@@ -287,7 +287,7 @@ collect_sql_info() {
         "$output_dir/$(date +'block-active-CMJ-%Y-%m-%d-%H-%M').csv"
 
     # Collect additional pool statistics
-    collect_extended_pool_stats "$output_dir"
+    #collect_extended_pool_stats "$output_dir"
 
     log "INFO" "SQL information collected in: $output_dir"
 }
